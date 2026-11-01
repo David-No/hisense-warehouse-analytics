@@ -1,0 +1,7 @@
+.env
+.git
+.venv
+.claude
+data/raw
+warehouse.duckdb
+__pycache__

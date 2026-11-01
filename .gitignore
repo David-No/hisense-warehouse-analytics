@@ -2,3 +2,4 @@ data/raw/
 warehouse.duckdb
 __pycache__/
 .venv/
+.env
