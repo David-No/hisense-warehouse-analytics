@@ -180,6 +180,8 @@ if __name__ == "__main__":  # self-check against the built database
     assert {("East", "damage_rate"), ("South", "inventory_accuracy")} <= got, got  # the planted anomalies
     assert not {("North", "damage_rate"), ("West", "damage_rate")} & got, got
 
+    wk = q("SELECT SUM(forecast_abs_error) / SUM(outbound_units) AS wape FROM gold.forecast_weekly")
+    assert 0 <= wk.wape[0] < 1
     weekly = q("SELECT * FROM gold.forecast_weekly WHERE warehouse = 'WH_1'")
     weekly["week_start"] = pd.to_datetime(weekly.week_start)
     fc = forecast(weekly.set_index("week_start").sort_index()[["outbound_units", "inbound_units"]])
@@ -191,6 +193,7 @@ if __name__ == "__main__":  # self-check against the built database
     planted = {"Ordered, not shipped", "Short shipped (ERP vs WMS)", "Missing from 3PL report", "Quantity mismatch (WMS vs 3PL)",
                "Ship date mismatch (WMS vs 3PL)", "Billed more than once", "Billed by 3PL, no WMS record"}
     assert planted <= types, planted - types
+    assert {"rate card", "no rate card (median used)", "n/a"} <= set(recon.rate_source.dropna())
     assert recon.order_id.is_unique and 0.8 < (recon.recon_status == "Matched").mean() < 1
 
     print("Self-check passed.\n" + rule_briefing(flags, q("SELECT * FROM gold.exceptions")))

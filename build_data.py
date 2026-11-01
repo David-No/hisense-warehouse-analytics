@@ -131,6 +131,7 @@ def sim_wms_and_billing(con, rng):
 
     m = o.reset_index().merge(fr, left_on=["carrier", "port", "svc"], right_on=["Carrier", "orig_port_cd", "svc_cd"])
     m = m[(m.w >= m.minm_wgh_qty) & (m.w <= m.max_wgh_qty)].drop_duplicates("index").set_index("index")
+    o["rate_source"] = np.where(o.index.isin(m.index), "rate card", "no rate card (median used)")
     o["charge"] = (np.maximum(m["minimum cost"], m.rate * m.w).reindex(o.index)
                    .fillna(np.maximum(fr["minimum cost"].median(), fr.rate.median() * o.w)))  # unrated carrier/service: median rate
 
@@ -157,14 +158,15 @@ def sim_wms_and_billing(con, rng):
         "carrier_code": [messy_code(c) for c in lines.carrier],
         "ship_qty": lines.ship_qty.to_numpy(),
         "ship_dt": [d.strftime("%m/%d/%Y") if rng.random() < 0.2 else d.strftime("%Y-%m-%d") for d in lines.ship_dt],
-        "billed_amount": lines.charge.round(2).to_numpy()})
+        "billed_amount": lines.charge.round(2).to_numpy(), "rate_source": lines.rate_source.to_numpy()})
     known, orphans = set(o.id), []
     for _ in range(40):  # charges for shipments that do not exist
         oid = f"{rng.integers(1447000000, 1447500000)}.{rng.integers(0, 10)}"
         if oid not in known:
             c = str(rng.choice(["V444_0", "V444_1", "V44_3"], p=[.4, .3, .3]))
             orphans.append({"invoice_ref": "ORD-" + oid, "carrier_code": messy_code(c), "ship_qty": int(rng.integers(100, 3000)),
-                            "ship_dt": o.d.iloc[0].strftime("%Y-%m-%d"), "billed_amount": round(float(rng.uniform(20, 400)), 2)})
+                            "ship_dt": o.d.iloc[0].strftime("%Y-%m-%d"), "billed_amount": round(float(rng.uniform(20, 400)), 2),
+                            "rate_source": "n/a"})
     return wms_out, pd.concat([bill, pd.DataFrame(orphans)], ignore_index=True).assign(source="simulated")
 
 
@@ -173,7 +175,7 @@ SILVER_GOLD = [
     # silver: clean names, types, and codes
     """CREATE TABLE silver.inv_daily AS  -- last day (Dec 30) is a partial week, so it is dropped
        SELECT CAST("Date" AS DATE) AS date, SKU_ID AS sku, Warehouse_ID AS warehouse, Units_Sold AS units_sold,
-              Inventory_Level AS inventory_level, Reorder_Point AS reorder_point, Order_Quantity AS order_qty
+              Inventory_Level AS inventory_level, Reorder_Point AS reorder_point, Order_Quantity AS order_qty, Demand_Forecast AS demand_forecast
        FROM bronze.inv_supply_chain WHERE CAST("Date" AS DATE) <= DATE '2024-12-29'""",
     """CREATE TABLE silver.retail AS
        SELECT Product_ID AS product_id, Product_Category AS category, Warehouse_ID AS warehouse_id,
@@ -193,12 +195,14 @@ SILVER_GOLD = [
        SELECT regexp_replace(UPPER(TRIM(invoice_ref)), '^ORD-?', '') AS order_id,
               UPPER(TRIM(REPLACE(carrier_code, '-', '_'))) AS carrier, SUM(ship_qty) AS qty_reported,
               MIN(CAST(COALESCE(TRY_STRPTIME(ship_dt, '%Y-%m-%d'), TRY_STRPTIME(ship_dt, '%m/%d/%Y')) AS DATE)) AS ship_date,
-              COUNT(*) AS line_count, SUM(billed_amount) AS billed_amount
+              COUNT(*) AS line_count, SUM(billed_amount) AS billed_amount,
+              MAX(rate_source) AS rate_source
        FROM bronze.sim_3pl_billing GROUP BY 1, 2""",
     # gold: one table per tab
     f"""CREATE TABLE gold.forecast_weekly AS
        SELECT warehouse, CAST(DATE_TRUNC('week', date) AS DATE) AS week_start,
               SUM(units_sold) AS outbound_units, SUM(order_qty) AS inbound_units,
+              SUM(demand_forecast) AS dataset_forecast_units, ABS(SUM(demand_forecast) - SUM(units_sold)) AS forecast_abs_error,
               SUM(CASE WHEN date = CAST(DATE_TRUNC('week', date) AS DATE) + 6 THEN inventory_level END) AS inventory_units,
               SUM(CAST(inventory_level < reorder_point AS INT)) AS sku_days_below_reorder, COUNT(*) AS sku_days,
               (SUM(units_sold) + SUM(order_qty)) / {UNITS_PER_LABOR_HOUR}.0 AS labor_hours
@@ -237,7 +241,7 @@ SILVER_GOLD = [
     """CREATE TABLE gold.recon AS
        SELECT COALESCE(e.order_id, m.order_id, t.order_id) AS order_id, COALESCE(e.carrier, t.carrier) AS carrier,
               e.service_level, e.plant, e.qty_ordered, m.qty_shipped, t.qty_reported,
-              e.order_date, m.ship_date AS wms_ship_date, t.ship_date AS tpl_ship_date, t.line_count, t.billed_amount,
+              e.order_date, m.ship_date AS wms_ship_date, t.ship_date AS tpl_ship_date, t.line_count, t.billed_amount, t.rate_source,
               CASE
                   WHEN m.order_id IS NULL AND t.order_id IS NOT NULL THEN 'Billed by 3PL, no WMS record'
                   WHEN m.order_id IS NULL THEN 'Ordered, not shipped'

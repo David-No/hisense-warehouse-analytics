@@ -145,6 +145,7 @@ with tab_fc:
     fig = go.Figure()
     fig.add_scatter(x=d.index, y=d.outbound_units, name="Outbound (history)", line_color=BLUE)
     fig.add_scatter(x=fc.index, y=fc.outbound_units, name="Outbound (forecast)", line=dict(color=BLUE, dash="dot"))
+    fig.add_scatter(x=d.index, y=d.dataset_forecast_units, name="Forecast in the Kaggle file", line=dict(color=STEEL, width=1, dash="dash"))
     fig.add_hline(y=cap_week, line_color=RED, annotation_text="Capacity (assumed)")
     fig.add_hline(y=cap_week * 0.9, line_color=AMBER, line_dash="dash", annotation_text="90%")
     fig.update_layout(title="Weekly outbound vs. capacity", height=360, yaxis_title="Units", legend_title=None)
@@ -159,6 +160,10 @@ with tab_fc:
     fig.update_layout(title="Replenishment and labor", height=340, yaxis_title="Units", legend_title=None,
                       yaxis2=dict(title="Labor hours", overlaying="y", side="right"))
     st.plotly_chart(fig, use_container_width=True)
+    wape = d.forecast_abs_error.sum() / d.outbound_units.sum()
+    st.caption(f"The Kaggle file's own forecast is off by {wape:.1%} of weekly units (summed absolute error / summed sales). "
+               "That is so close to actual sales that it was probably built from them, so it is not a fair benchmark for ours. "
+               "Our method cannot be back-tested yet: it needs a second year of data.")
     st.caption("Method: each future week repeats the same week one year earlier (the source has one year, 2024, so no growth trend), "
                "then the scenario slider. Capacity is the real peak week times an assumed headroom, not a measured figure.")
 
@@ -214,6 +219,9 @@ with tab_rec:
     m2.metric("Three-way match rate", f"{(r.recon_status == 'Matched').mean():.1%}")
     m3.metric("Exceptions to review", f"{len(issues):,}")
     m4.metric("Billing at risk", f"${at_risk:,.0f}", help="3PL charges with no WMS shipment, plus duplicate lines")
+    nr = (r.rate_source == "no rate card (median used)").sum()
+    st.caption(f"{nr:,} of {len(r):,} orders have no rate on the Kaggle freight rate card (carrier V44_3, service CRF, or V444_1 "
+               "with DTD). Their billed amounts are priced at the median rate in this demo, so amounts on those orders are not a real check.")
     st.caption("Every order matched across ERP (ordered), WMS (shipped), and the 3PL report (billed). "
                "All orders in the source are dated 2013-05-26, so there is no trend to show.")
 
