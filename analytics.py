@@ -6,14 +6,15 @@ import os
 
 import pandas as pd
 
-# key: (label, target, watch, higher_is_better, format). Targets are illustrative, set by the app owner.
+# key: (label, target, watch, higher_is_better, format).
+# Only utilization has a fixed limit (a capacity guard). The others are judged against their own trailing baseline (see status).
 KPIS = {
-    "logistics_expense_rate": ("Logistics expense rate", 0.0010, 0.00105, False, "{:.3%}"),
-    "cost_per_unit": ("Cost per unit shipped", 0.100, 0.105, False, "${:.3f}"),
-    "inventory_accuracy": ("Inventory accuracy", 0.980, 0.970, True, "{:.1%}"),
-    "damage_rate": ("Damage rate", 0.0025, 0.0035, False, "{:.2%}"),
+    "logistics_expense_rate": ("Logistics expense rate", None, None, False, "{:.3%}"),
+    "cost_per_unit": ("Cost per unit shipped", None, None, False, "${:.3f}"),
+    "inventory_accuracy": ("Inventory accuracy", None, None, True, "{:.1%}"),
+    "damage_rate": ("Damage rate", None, None, False, "{:.2%}"),
     "utilization": ("Warehouse utilization", 0.85, 0.90, False, "{:.1%}"),
-    "on_time_rate": ("On-time delivery", 0.95, 0.93, True, "{:.1%}"),
+    "on_time_rate": ("On-time delivery", None, None, True, "{:.1%}"),
 }
 UNITS_PER_LABOR_HOUR = 22  # same assumption as build_data.py
 
@@ -34,11 +35,35 @@ def rollup(df):
     return out
 
 
-def status(key, value):
+def baseline(kpi, month, n=12, gap=3):
+    """The n months ending `gap` months before `month`, so a problem that is still developing does not hide in its own baseline.
+    kpi is a slice of gold.kpi_monthly. Returns {kpi: (pooled rate from summed inputs, std dev of the monthly rates)},
+    or None with under 6 months of history."""
+    months = sorted(kpi.month.unique())
+    i = months.index(month)
+    win = months[max(0, i - gap - n):max(0, i - gap)]
+    if len(win) < 6:
+        return None
+    monthly = pd.DataFrame([rollup(kpi[kpi.month == m]) for m in win])
+    pooled = rollup(kpi[kpi.month.isin(win)])
+    return {k: (pooled[k], monthly[k].std()) for k in KPIS}
+
+
+# smallest worsening (in the KPI's own units) that matters, so a tiny wobble is never flagged just because the data is steady
+MATERIAL = {"logistics_expense_rate": 0.00005, "cost_per_unit": 0.005, "inventory_accuracy": 0.005, "damage_rate": 0.0005, "on_time_rate": 0.01}
+
+
+def status(key, value, base=None, sd=None):
+    """Utilization: fixed 85%/90% limits. Everything else: vs. its own baseline.
+    On target = no worse than 2 std devs from baseline, Watch = 2 to 3, Off target = more than 3 (the AI tab's flag test)."""
     _, target, watch, higher, _ = KPIS[key]
-    good = value >= target if higher else value <= target
-    ok = value >= watch if higher else value <= watch
-    return "On target" if good else "Watch" if ok else "Off target"
+    if target is not None:
+        return "On target" if value <= target else "Watch" if value <= watch else "Off target"
+    if base is None or not sd:
+        return "No baseline"
+    worse = (base - value) if higher else (value - base)
+    z = worse / sd if worse >= MATERIAL[key] else 0
+    return "On target" if z <= 2 else "Watch" if z <= 3 else "Off target"
 
 
 def forecast(weekly, horizon=12, scenario=0.0):
@@ -174,6 +199,15 @@ if __name__ == "__main__":  # self-check against the built database
         if k in KPIS and k != "cost_per_unit":
             assert v < 1, f"{k}={v}"
     assert 0.9 < now["inventory_accuracy"] < 1 and now["damage_rate"] < 0.02
+    last = sorted(kpi.month.unique())[-1]
+    states = {r: {k: status(k, rollup(kpi[(kpi.month == last) & (kpi.region == r)])[k], *baseline(kpi[kpi.region == r], last)[k])
+                  for k in KPIS} for r in kpi.region.unique()}
+    assert states["East"]["damage_rate"] == "Off target" and states["South"]["inventory_accuracy"] == "Off target", states
+    assert states["North"]["damage_rate"] != "Off target" and states["West"]["damage_rate"] != "Off target", states
+    assert baseline(kpi, sorted(kpi.month.unique())[4]) is None
+    calm = [status(k, rollup(kpi[(kpi.month == last) & (kpi.region == r)])[k], *baseline(kpi[kpi.region == r], last)[k])
+            for r in ("North", "West") for k in ("damage_rate", "inventory_accuracy", "on_time_rate")]
+    assert "Off target" not in calm, calm
 
     flags = find_anomalies(kpi)
     got = set(zip(flags.region, flags.metric))

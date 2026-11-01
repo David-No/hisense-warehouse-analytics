@@ -94,3 +94,11 @@ All rates are computed as sum(numerator) / sum(denominator) at the requested gra
 - **E. Brunel WhCosts / WhCapacities:** loaded to bronze, not used.
 - **Not decided earlier, chosen while building:** the first 52 weeks (2024-01-01 to 2024-12-29) are used, because Dec 30 is a partial week. With one year of data the forecast has no growth trend.
 - **Targets** on the scorecard are illustrative. The retail file looks synthetic, so on-time and utilization are about 50% in every region.
+
+## 5. Follow-up fixes (2026-10-31)
+
+- **Better Section 3 dataset: searched, none adopted.** Checked six Kaggle candidates (all CC0 except the grocery one, "other"): E-commerce Delivery 2026, Intelligent Warehouse Operations, Logistics Warehouse, Inventory Demand Forecasting and Stockout Risk, Logistics and Supply Chain, Grocery Inventory. None is more realistic. E-commerce Delivery has 56% late orders, shipping at 68% of order value, and order dates up to Dec 2026. Intelligent Warehouse has accuracy near 95% and utilization near 72% in every warehouse and month. Fallback used: scorecard status is judged against each KPI's own baseline.
+- **Status rule:** baseline = the 12 months ending 3 months before the selected month (so a developing problem does not hide in its own baseline), pooled from summed inputs. On target = within 2 standard deviations or better, Watch = 2 to 3, Off target = more than 3, with a minimum worsening per KPI (`MATERIAL` in `analytics.py`). Utilization keeps a fixed 85% / 90% capacity limit. Over all 135 region-months, planted issues are flagged in the recent months, and about 1.6% of other cells show Watch or Off target by chance.
+- **Unrated freight:** 2,146 of 9,255 orders have no rate on the rate card (V44_3 with CRF: 810; V444_1 with DTD: 1,336). They are labeled in `rate_source` and in the app. (An earlier note said 854; that missed V444_1 with DTD.)
+- **Kaggle forecast as reference:** its weekly error is 0.6% of sales, so it looks built from the actuals and is not a fair benchmark.
+- **Licenses:** two CC0, one CC BY-NC-SA 4.0 (Retail). See README.

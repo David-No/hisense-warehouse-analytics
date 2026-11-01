@@ -43,8 +43,12 @@ Set `OPENAI_API_KEY` (and optionally `OPENAI_MODEL`, default `gpt-4o-mini`) to t
 - [Retail Supply Chain Analytics Dataset](https://www.kaggle.com/datasets/roshaaann30/retail-supply-chain-analytics-dataset) by roshaaann30
 - [Supply Chain Logistics Data](https://www.kaggle.com/datasets/omarstat2/supply-chain-logistics-data) by omarstat2 (Brunel University supply chain case)
 
-Each dataset keeps its own license; check the Kaggle page for terms before reuse. License terms: **not yet verified by the author** (see TODO below).
+Licenses (read from the Kaggle API on 2026-10-31):
 
-TODO before publishing: confirm each dataset's license allows redistributing the Parquet copies in `data/bronze/`.
+| Dataset | License | What it means here |
+|---|---|---|
+| High-Dimensional Supply Chain Inventory | CC0 1.0 | Public domain; copies and derived tables are fine. |
+| Supply Chain Logistics Data (Brunel) | CC0 1.0 | Public domain; copies and derived tables are fine. |
+| Retail Supply Chain Analytics | **CC BY-NC-SA 4.0** | Credit the author, non-commercial use only, and share adaptations under the same license. This covers `data/bronze/retail_supply_chain.parquet` and the KPI tables derived from it. |
 
-Code: MIT, see `LICENSE`.
+Code: MIT, see `LICENSE`. The MIT license does not cover the retail data or anything derived from it, which stay under CC BY-NC-SA 4.0. This is a non-commercial portfolio project.

@@ -67,7 +67,10 @@ tab_kpi, tab_fc, tab_ai, tab_rec = st.tabs(["KPI scorecard", "Forecast and capac
 with tab_kpi:
     provenance("kpi")
     st.caption("Heads up: the Kaggle retail file looks synthetic (most columns are evenly spread), so utilization and "
-               "on-time sit near 50% everywhere. Targets are illustrative.")
+               "on-time sit near 50% everywhere. Because of that, status compares each KPI with its own baseline: the 12 months "
+               "ending 3 months earlier (same regions, pooled from summed inputs). On target = within 2 standard deviations "
+               "or better, Watch = 2 to 3, Off target = more than 3 (the same test the AI tab uses). "
+               "Utilization uses a fixed 85% / 90% capacity limit instead.")
     all_regions = sorted(kpi.region.unique())
     regions = st.multiselect("Regions", all_regions, default=all_regions)
     if not regions:
@@ -79,6 +82,7 @@ with tab_kpi:
         prior = months[months.index(month) - 1] if months.index(month) else None
         now = an.rollup(kpi_f[kpi_f.month == month])
         before = an.rollup(kpi_f[kpi_f.month == prior]) if prior else None
+        base = an.baseline(kpi_f, month)
         tiles = list(an.KPIS.items()) + [("units_sold", ("Units shipped", None, None, True, "{:,.0f}"))]
         for row in (tiles[:4], tiles[4:]):
             for col, (key, (label, target, _, higher, fmt)) in zip(st.columns(4), row):
@@ -87,17 +91,21 @@ with tab_kpi:
                     delta = f"{(value - before[key]) * 100:+.2f} pts" if fmt.endswith("%}") else (
                         f"{value / before[key] - 1:+.1%}" if key == "units_sold" else f"{value - before[key]:+.4f}")
                 col.metric(label, fmt.format(value), delta, delta_color="normal" if higher else "inverse")
-                if target is None:
-                    col.caption("Outbound throughput (no target)")
-                else:
-                    state = an.status(key, value)
-                    col.markdown(f"<span class='badge' style='background:{STATUS_COLOR[state]}'>{state}</span> "
-                                 f"<small>target {'≥' if higher else '≤'} {fmt.format(target)}</small>", unsafe_allow_html=True)
+                if key == "units_sold":
+                    col.caption("Outbound throughput (no status)")
+                    continue
+                b = base[key] if base else (None, None)
+                state = an.status(key, value, *b)
+                note = (f"limit ≤ {fmt.format(target)}" if target is not None
+                        else f"12-mo baseline {fmt.format(b[0])}" if base else "needs 6+ months of history")
+                col.markdown(f"<span class='badge' style='background:{STATUS_COLOR.get(state, STEEL)}'>{state}</span> "
+                             f"<small>{note}</small>", unsafe_allow_html=True)
 
         st.subheader("Trend by region")
         key = st.selectbox("KPI", list(an.KPIS), format_func=lambda k: an.KPIS[k][0])
         fig = px.line(kpi_f, x="month", y=key, color="region", markers=True)
-        fig.add_hline(y=an.KPIS[key][1], line_dash="dash", line_color=STEEL, annotation_text="Target")
+        if an.KPIS[key][1] is not None:
+            fig.add_hline(y=an.KPIS[key][1], line_dash="dash", line_color=STEEL, annotation_text="Limit")
         fig.update_layout(yaxis_title=None, xaxis_title=None, legend_title=None, height=380,
                           yaxis_tickformat=".2%" if an.KPIS[key][4].endswith("%}") else "$.3f")
         st.plotly_chart(fig, use_container_width=True)
