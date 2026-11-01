@@ -10,6 +10,8 @@ pinned: false
 
 # Warehouse operations analytics
 
+**Live demo:** https://davidno7-hisense-warehouse-analytics.hf.space  |  **Code:** https://github.com/David-No/hisense-warehouse-analytics
+
 A portfolio dashboard for warehouse and 3PL operations in consumer electronics. It uses **real Kaggle data wherever a dataset covers a need** and simulates data **only for gaps**. Every tab says which is which.
 
 | Tab | Real data (Kaggle) | Simulated (labeled in the app) |

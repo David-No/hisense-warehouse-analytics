@@ -1,4 +1,0 @@
-data/
-warehouse.duckdb
-__pycache__/
-.venv/
