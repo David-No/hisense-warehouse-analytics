@@ -196,14 +196,24 @@ with tab_ai:
     st.subheader("Briefing")
     context = an.ai_context(flags, kpi, exceptions)
     if os.getenv("OPENAI_API_KEY"):
-        if st.button("Write AI briefing"):
+        history = st.session_state.setdefault("qa", [])  # newest first, so answers survive reruns
+        briefing = st.button("Write AI briefing")
+        with st.form("ask", clear_on_submit=True):
+            question = st.text_input("Ask a question about the data", placeholder="Why is damage rising in the East region?")
+            asked = st.form_submit_button("Ask")
+        title, prompt = (("AI briefing", "Write a short briefing for the Director of Distribution: the top issues, "
+                          "likely root causes, and recommended actions.") if briefing
+                         else (question.strip(), question.strip()) if asked else (None, None))
+        if prompt:
             with st.spinner("Reading KPIs and exception notes"):
-                st.markdown(an.ask_ai("Write a short briefing for the Director of Distribution: the top issues, "
-                                      "likely root causes, and recommended actions.", context))
-        question = st.text_input("Ask a question about the data", placeholder="Why is damage rising in the East region?")
-        if question:
-            with st.spinner("Thinking it through"):
-                st.markdown(an.ask_ai(question, context))
+                try:
+                    history.insert(0, (title, an.ask_ai(prompt, context)))
+                except Exception as e:  # bad key, network, quota: fall back to the rule-based briefing
+                    st.error(f"The AI request failed ({type(e).__name__}). Showing the rule-based briefing instead.")
+                    history.insert(0, (title, an.rule_briefing(flags, exceptions)))
+        for q, a in history:
+            st.markdown(f"**{q}**")
+            st.markdown(a)
     else:
         st.markdown(an.rule_briefing(flags, exceptions))
         st.caption("Rule-based briefing. Add an OPENAI_API_KEY secret to turn on AI briefings and questions.")
