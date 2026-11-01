@@ -6,6 +6,7 @@ colorTo: yellow
 sdk: docker
 app_port: 8501
 pinned: false
+license: mit
 ---
 
 # Warehouse operations analytics
