@@ -97,7 +97,7 @@ Columns listed below are expectations from the dataset descriptions. **Verify ev
 
 ### Phase 6: Deploy
 - GitHub: create empty repo `warehouse-ops-analytics`; add MIT `LICENSE` (copyright 2026 David No); commit and push.
-- Hugging Face: new Space `DavidNo7/warehouse-ops-analytics`, SDK Docker, free CPU. `git remote add space https://huggingface.co/spaces/DavidNo7/warehouse-ops-analytics` then `git push --force space main` (first push only; use an HF write token as the password).
+- Hugging Face: new Space `DavidNo7/hisense-warehouse-analytics`, SDK Docker, free CPU. `git remote add space https://huggingface.co/spaces/DavidNo7/hisense-warehouse-analytics` then `git push --force space main` (first push only; use an HF write token as the password).
 - Files over 10 MB need Git LFS on Hugging Face: `git lfs install` and `git lfs track "*.parquet"` before committing.
 - Add secret `OPENAI_API_KEY` in Space settings. Confirm the build log, then test every tab in a private window.
 - Write files without a BOM (README front matter must start with `---`).

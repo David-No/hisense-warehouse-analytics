@@ -1,30 +1,37 @@
-"""Analytics used by the app. Pure pandas, so it can be tested without Streamlit."""
+"""Analytics used by the app and the self-check. Pure pandas, so it can be tested without Streamlit.
+
+Run `python analytics.py` after `python build_data.py` to self-check the built database.
+"""
 import os
 
 import pandas as pd
 
-# key: (label, target, watch, higher_is_better, format)
+# key: (label, target, watch, higher_is_better, format). Targets are illustrative, set by the app owner.
 KPIS = {
-    "logistics_expense_rate": ("Logistics expense rate", 0.030, 0.032, False, "{:.2%}"),
+    "logistics_expense_rate": ("Logistics expense rate", 0.0010, 0.00105, False, "{:.3%}"),
+    "cost_per_unit": ("Cost per unit shipped", 0.100, 0.105, False, "${:.3f}"),
     "inventory_accuracy": ("Inventory accuracy", 0.980, 0.970, True, "{:.1%}"),
     "damage_rate": ("Damage rate", 0.0025, 0.0035, False, "{:.2%}"),
     "utilization": ("Warehouse utilization", 0.85, 0.90, False, "{:.1%}"),
-    "on_time_rate": ("On-time shipping", 0.95, 0.93, True, "{:.1%}"),
-    "units_per_labor_hour": ("Units per labor hour", 22.0, 21.0, True, "{:.1f}"),
+    "on_time_rate": ("On-time delivery", 0.95, 0.93, True, "{:.1%}"),
 }
+UNITS_PER_LABOR_HOUR = 22  # same assumption as build_data.py
 
 
 def rollup(df):
-    """Network-level KPIs from summed inputs (never average the rates)."""
+    """KPIs from summed inputs (never average the rates). Works for any slice of gold.kpi_monthly or gold.warehouse_top."""
     s = df.sum(numeric_only=True)
-    return {
-        "logistics_expense_rate": s.logistics_cost / s.sales_revenue,
-        "inventory_accuracy": s.locations_accurate / s.locations_counted,
-        "damage_rate": s.units_damaged / s.units_handled,
-        "utilization": s.avg_pallets / s.pallet_capacity,
-        "on_time_rate": s.units_shipped_on_time / s.units_shipped,
-        "units_per_labor_hour": s.units_handled / s.labor_hours,
+    out = {
+        "logistics_expense_rate": s.shipping_cost / s.revenue,
+        "cost_per_unit": s.shipping_cost / s.units_sold,
+        "damage_rate": s.units_damaged / s.units_sold,
+        "utilization": s.occupied / s.capacity,
+        "on_time_rate": s.units_on_time / s.units_sold,
+        "units_sold": s.units_sold,
     }
+    if "locations_counted" in s:  # cycle counts exist by region-month only
+        out["inventory_accuracy"] = s.locations_accurate / s.locations_counted
+    return out
 
 
 def status(key, value):
@@ -35,19 +42,15 @@ def status(key, value):
 
 
 def forecast(weekly, horizon=12, scenario=0.0):
-    """Seasonal baseline: the same week last year, scaled by the last 12 weeks' year-over-year trend.
+    """Seasonal baseline: each future week repeats the same week one year earlier, scaled by the scenario.
 
-    weekly: DataFrame indexed by week_start (Timestamp), numeric columns.
-    ponytail: seasonal-naive with trend, swap in Prophet or ETS if accuracy needs to improve.
+    weekly: DataFrame indexed by week_start (Timestamp), numeric columns, at least 52 weeks.
+    shortcut: no growth trend (the source has one year, so year-over-year growth is unknown); add it once there are 2+ years.
     """
-    last = weekly.index.max()
     week = pd.Timedelta(weeks=1)
-    recent = weekly.loc[last - 11 * week:last].sum()
-    prior = weekly.loc[last - 63 * week:last - 52 * week].sum()
-    future = [last + k * week for k in range(1, horizon + 1)]
-    base = weekly.reindex([f - 52 * week for f in future]).to_numpy()
-    out = pd.DataFrame(base * (recent / prior).to_numpy() * (1 + scenario), index=future, columns=weekly.columns)
-    out.index.name = weekly.index.name
+    future = [weekly.index.max() + k * week for k in range(1, horizon + 1)]
+    out = weekly.reindex([f - 52 * week for f in future]) * (1 + scenario)
+    out.index = pd.DatetimeIndex(future, name=weekly.index.name)
     return out
 
 
@@ -56,26 +59,23 @@ WATCHED = {"damage_rate": (True, 0.0005), "inventory_accuracy": (False, 0.01), "
 
 
 def find_anomalies(kpi, z_limit=3.0):
-    """Compare each warehouse's last 3 months with the 6 months before the last 6 (a clean baseline)."""
+    """Compare each region's last 3 months with the 6 months before the last 6 (a clean baseline)."""
     flags = []
-    for wh, d in kpi.sort_values("month").groupby("warehouse"):
+    for region, d in kpi.sort_values("month").groupby("region"):
         recent, base = d.tail(3), d.iloc[-12:-6]
         for metric, (higher_bad, min_change) in WATCHED.items():
             r, b, sd = recent[metric].mean(), base[metric].mean(), base[metric].std() or 1e-9
             change = r - b if higher_bad else b - r
             z = change / sd
             if z >= z_limit and change >= min_change:
-                flags.append({"warehouse": wh, "tpl": d.tpl.iloc[0], "metric": metric, "recent": r,
-                              "baseline": b, "z": round(z, 1),
-                              "message": f"{wh} ({d.tpl.iloc[0]}): {KPIS[metric][0].lower()} is "
-                                         f"{KPIS[metric][4].format(r)} over the last 3 months vs. "
-                                         f"{KPIS[metric][4].format(b)} baseline"})
+                flags.append({"region": region, "metric": metric, "recent": r, "baseline": b, "z": round(z, 1),
+                              "message": f"{region} region: {KPIS[metric][0].lower()} is {KPIS[metric][4].format(r)} "
+                                         f"over the last 3 months vs. {KPIS[metric][4].format(b)} baseline"})
         util = d.utilization.iloc[-1]
         if util > KPIS["utilization"][2]:
-            flags.append({"warehouse": wh, "tpl": d.tpl.iloc[0], "metric": "utilization", "recent": util,
-                          "baseline": d.utilization.mean(), "z": None,
-                          "message": f"{wh}: utilization is {util:.1%} this month, above the 90% limit"})
-    return pd.DataFrame(flags)
+            flags.append({"region": region, "metric": "utilization", "recent": util, "baseline": d.utilization.mean(),
+                          "z": None, "message": f"{region} region: utilization is {util:.1%} this month, above the 90% limit"})
+    return pd.DataFrame(flags, columns=["region", "metric", "recent", "baseline", "z", "message"])
 
 
 THEMES = {
@@ -101,34 +101,38 @@ METRIC_EXCEPTION = {"damage_rate": "Damage", "inventory_accuracy": "Count varian
 
 
 def rule_briefing(flags, exceptions):
+    """Rule-based fallback used when there is no API key."""
     if flags.empty:
         return "No KPI is outside its normal range right now."
     lines = []
+    recent_months = sorted(exceptions.month.unique())[-3:]
     for f in flags.itertuples():
         line = f"- **{f.message}.**"
         etype = METRIC_EXCEPTION.get(f.metric)
         if etype:
-            recent_months = sorted(exceptions.month.unique())[-3:]
-            notes = exceptions[(exceptions.warehouse == f.warehouse) & (exceptions.exception_type == etype)
+            notes = exceptions[(exceptions.region == f.region) & (exceptions.exception_type == etype)
                                & exceptions.month.isin(recent_months)].note
             themes = note_themes(notes)
             if len(themes):
                 top = themes.index[0]
-                line += (f" The most common note theme is {top.lower()} ({themes.iloc[0]} of {len(notes)} "
-                         f"incidents). Next step: {THEMES[top][1]}")
+                where = exceptions[(exceptions.region == f.region) & (exceptions.exception_type == etype)
+                                   & exceptions.month.isin(recent_months) & exceptions.note.str.contains(THEMES[top][0], case=False)]
+                ids = where.warehouse_id.value_counts()
+                line += (f" The most common note theme is {top.lower()} ({themes.iloc[0]} of {len(notes)} incidents, "
+                         f"mostly warehouses {', '.join(ids.index[:3])}). Next step: {THEMES[top][1]}")
         lines.append(line)
     return "\n".join(lines)
 
 
 def ai_context(flags, kpi, exceptions):
     months = sorted(kpi.month.unique())[-3:]
-    flagged = flags.warehouse.unique() if not flags.empty else []
-    notes = exceptions[exceptions.month.isin(months) & exceptions.warehouse.isin(flagged)]
-    sample = notes.groupby(["warehouse", "exception_type"]).head(8)[["warehouse", "exception_type", "category", "note"]]
-    latest = kpi[kpi.month == months[-1]].drop(columns=["month"]).round(4)
-    return ("Latest month KPIs by warehouse:\n" + latest.to_csv(index=False)
+    flagged = flags.region.unique() if not flags.empty else []
+    notes = exceptions[exceptions.month.isin(months) & exceptions.region.isin(flagged)]
+    sample = notes.groupby(["region", "exception_type"]).head(8)[["region", "warehouse_id", "exception_type", "category", "note"]]
+    cols = ["region", "units_sold", "logistics_expense_rate", "cost_per_unit", "inventory_accuracy", "damage_rate", "utilization", "on_time_rate"]
+    return ("Latest month KPIs by region:\n" + kpi[kpi.month == months[-1]][cols].round(5).to_csv(index=False)
             + "\nFlags from statistical checks:\n" + (flags.drop(columns="message").to_csv(index=False) if not flags.empty else "none\n")
-            + "\nSample exception notes from flagged warehouses, last 3 months:\n" + sample.to_csv(index=False))
+            + "\nSample exception notes from flagged regions, last 3 months:\n" + sample.to_csv(index=False))
 
 
 def ask_ai(question, context):
@@ -141,10 +145,10 @@ def ask_ai(question, context):
         model=os.getenv("OPENAI_MODEL", "gpt-4o-mini"),
         messages=[
             {"role": "system", "content": (
-                "You are a logistics analytics assistant for a consumer electronics distribution network run "
-                "through 3PL partners. Use only the data provided. Be concise and practical: what is happening, "
-                "the likely root cause, the recommended action, and what to verify before acting. "
-                "Say so when the data does not support a conclusion.")},
+                "You are a logistics analytics assistant for a consumer electronics distribution network. "
+                "Use only the data provided. Be concise and practical: what is happening, the likely root cause, "
+                "the recommended action, and what to verify before acting. Say so when the data does not support a "
+                "conclusion. This is a demo: the exception notes, cycle counts, and damage counts are simulated.")},
             {"role": "user", "content": f"{context}\n\nQuestion: {question}"},
         ],
         temperature=0.2,
@@ -156,11 +160,37 @@ if __name__ == "__main__":  # self-check against the built database
     import duckdb
 
     con = duckdb.connect("warehouse.duckdb", read_only=True)
-    kpi = con.execute("SELECT * FROM gold.kpi_monthly").df()
+    q = lambda sql: con.execute(sql).df()  # noqa: E731
+
+    for t in q("SELECT table_name FROM information_schema.tables WHERE table_schema = 'gold'").table_name:
+        assert q(f"SELECT COUNT(*) AS n FROM gold.{t}").n[0] > 0, f"gold.{t} is empty"
+    src = q("SELECT tab, origin FROM gold.data_sources")
+    assert {(t, o) for t in ("forecast", "kpi", "ai", "recon") for o in ("Kaggle", "Simulated")} <= set(zip(src.tab, src.origin))
+
+    kpi = q("SELECT * FROM gold.kpi_monthly")
+    now = rollup(kpi)
+    for k, v in now.items():  # sane ranges
+        assert v > 0, k
+        if k in KPIS and k != "cost_per_unit":
+            assert v < 1, f"{k}={v}"
+    assert 0.9 < now["inventory_accuracy"] < 1 and now["damage_rate"] < 0.02
+
     flags = find_anomalies(kpi)
-    assert {("Cranbury DC", "damage_rate"), ("Dallas DC", "inventory_accuracy")} <= set(zip(flags.warehouse, flags.metric))
-    weekly = con.execute("SELECT week_start, SUM(outbound_units) AS outbound_units FROM gold.weekly_volume "
-                         "WHERE warehouse = 'Atlanta DC' GROUP BY 1").df()
+    got = set(zip(flags.region, flags.metric))
+    assert {("East", "damage_rate"), ("South", "inventory_accuracy")} <= got, got  # the planted anomalies
+    assert not {("North", "damage_rate"), ("West", "damage_rate")} & got, got
+
+    weekly = q("SELECT * FROM gold.forecast_weekly WHERE warehouse = 'WH_1'")
     weekly["week_start"] = pd.to_datetime(weekly.week_start)
-    assert len(forecast(weekly.set_index("week_start").sort_index())) == 12
-    print("Self-check passed.\n" + rule_briefing(flags, con.execute("SELECT * FROM gold.exceptions").df()))
+    fc = forecast(weekly.set_index("week_start").sort_index()[["outbound_units", "inbound_units"]])
+    assert len(fc) == 12 and fc.notna().all().all()
+    assert (forecast(weekly.set_index("week_start").sort_index()[["outbound_units"]], scenario=0.1) / fc[["outbound_units"]] - 1.1).abs().max().max() < 1e-9
+
+    recon = q("SELECT * FROM gold.recon")
+    types = set(recon.recon_status)
+    planted = {"Ordered, not shipped", "Short shipped (ERP vs WMS)", "Missing from 3PL report", "Quantity mismatch (WMS vs 3PL)",
+               "Ship date mismatch (WMS vs 3PL)", "Billed more than once", "Billed by 3PL, no WMS record"}
+    assert planted <= types, planted - types
+    assert recon.order_id.is_unique and 0.8 < (recon.recon_status == "Matched").mean() < 1
+
+    print("Self-check passed.\n" + rule_briefing(flags, q("SELECT * FROM gold.exceptions")))
